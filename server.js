@@ -6,29 +6,56 @@ const cors = require("cors");
 const app = express();
 app.use(cors());
 
-const db = mysql.createConnection({
-  host: process.env["DB_HOST"],
-  user: process.env["DB_USER"],
-  password: process.env["DB_PASS"],
-  database: process.env["DB_DATABASE"],
+const db = mysql.createPool({
+  connectionLimit: 10,
+  host: process.env.DB_HOST,
+  user: process.env.DB_USER,
+  password: process.env.DB_PASS,
+  database: process.env.DB_DATABASE,
 });
 
-db.connect(function (err) {
+db.getConnection((err, connection) => {
   if (err) throw err;
-  console.log("Connected!");
-  db.query(
-    "CREATE DATABASE IF NOT EXISTS technoclubproject",
-    function (err, result) {
-      if (err) throw err;
-      console.log("Database created");
-    }
-  );
+  console.log("Connected to database!");
+  connection.release();
 });
 
-const createSeatingsTable = `CREATE TABLE IF NOT EXISTS seatings(
+const createTables = () => {
+  const createSeatingsTable = `CREATE TABLE IF NOT EXISTS seatings(
     seatingid INT PRIMARY KEY AUTO_INCREMENT NOT NULL,
     seatingname VARCHAR(45) NOT NULL
   )`;
+
+  const createEventsTable = `CREATE TABLE IF NOT EXISTS events(
+    eventid INT PRIMARY KEY AUTO_INCREMENT NOT NULL,
+    eventname VARCHAR(255) NOT NULL,
+    date VARCHAR(10) NOT NULL,
+    artists LONGTEXT NOT NULL
+  )`;
+
+  const createReservationsTable = `CREATE TABLE IF NOT EXISTS reservations(
+    id INT PRIMARY KEY AUTO_INCREMENT NOT NULL,
+    seatingid INT NOT NULL,
+    eventid INT NOT NULL,
+    email VARCHAR(255) NOT NULL,
+    fullname VARCHAR(255) NOT NULL,
+    pin VARCHAR(4) NOT NULL,
+    FOREIGN KEY (seatingid) REFERENCES seatings(seatingid),
+    FOREIGN KEY (eventid) REFERENCES events(eventid)
+  )`;
+
+  db.query(createSeatingsTable, (err) => {
+    if (err) console.log(err);
+  });
+  db.query(createEventsTable, (err) => {
+    if (err) console.log(err);
+  });
+  db.query(createReservationsTable, (err) => {
+    if (err) console.log(err);
+  });
+};
+
+createTables();
 
 const insertSeatingsNames = "INSERT INTO seatings (seatingname) VALUES ?";
 const seatings = [
@@ -65,70 +92,66 @@ const seatings = [
 ];
 
 const insertEvents =
-  "INSERT INTO events (eventid, eventname, date, artists) VALUES (?, ?, ?, ?)";
-
+  "INSERT INTO events (eventid, eventname, date, artists) VALUES ?";
 const events = [
   [
-    [
-      1,
-      "Event 1p",
-      "14.07.2024",
-      "Sed ut perspiciatis,unde omnis iste natus,error sit,voluptatem,accusantium doloremque,laudantium",
-    ],
-    [
-      2,
-      "Event 2p",
-      "20.02.2025",
-      "totam rem,aperiam,eaque ipsa quae,ab illo inventore",
-    ],
-    [
-      3,
-      "Event 3p",
-      "04.03.2025",
-      "veritatis et quasi,architecto beatae,vitae dicta sunt,explicabo",
-    ],
-    [
-      4,
-      "Event 4",
-      "23.08.2025",
-      "Nemo enim,ipsam voluptatem,quia,voluptas sit aspernatur,aut odit,aut fugit",
-    ],
-    [
-      5,
-      "Event 5",
-      "03.10.2025",
-      "Sed ut perspiciatis,unde omnis iste natus,error sit,voluptatem,accusantium doloremque,laudantium",
-    ],
-    [
-      6,
-      "Event 6",
-      "27.11.2025",
-      "totam rem,aperiam,eaque ipsa quae,ab illo inventore",
-    ],
-    [
-      7,
-      "Event 7",
-      "10.12.2025",
-      "veritatis et quasi,architecto beatae,vitae dicta sunt,explicabo",
-    ],
-    [
-      8,
-      "Event 8",
-      "01.20.2026",
-      "dignissimos,ducimus,qui blanditiis,praesentium,voluptatum,deleniti",
-    ],
-    [
-      9,
-      "Event 9",
-      "02.19.2026",
-      "ibero tempore,cum soluta,nobis est eligendi,optio,cumque,nihil impedit quo minus,",
-    ],
+    1,
+    "Event 1p",
+    "14.07.2024",
+    "Sed ut perspiciatis,unde omnis iste natus,error sit,voluptatem,accusantium doloremque,laudantium",
+  ],
+  [
+    2,
+    "Event 2p",
+    "20.02.2025",
+    "totam rem,aperiam,eaque ipsa quae,ab illo inventore",
+  ],
+  [
+    3,
+    "Event 3p",
+    "04.03.2025",
+    "veritatis et quasi,architecto beatae,vitae dicta sunt,explicabo",
+  ],
+  [
+    4,
+    "Event 4",
+    "23.08.2025",
+    "Nemo enim,ipsam voluptatem,quia,voluptas sit aspernatur,aut odit,aut fugit",
+  ],
+  [
+    5,
+    "Event 5",
+    "03.10.2025",
+    "Sed ut perspiciatis,unde omnis iste natus,error sit,voluptatem,accusantium doloremque,laudantium",
+  ],
+  [
+    6,
+    "Event 6",
+    "27.11.2025",
+    "totam rem,aperiam,eaque ipsa quae,ab illo inventore",
+  ],
+  [
+    7,
+    "Event 7",
+    "10.12.2025",
+    "veritatis et quasi,architecto beatae,vitae dicta sunt,explicabo",
+  ],
+  [
+    8,
+    "Event 8",
+    "01.20.2026",
+    "dignissimos,ducimus,qui blanditiis,praesentium,voluptatum,deleniti",
+  ],
+  [
+    9,
+    "Event 9",
+    "02.19.2026",
+    "ibero tempore,cum soluta,nobis est eligendi,optio,cumque,nihil impedit quo minus",
   ],
 ];
 
 const insertReservations =
-  "INSERT INTO reservations (id, seatingid, eventid, email, fullname, pin) VALUES (?, ?, ?, ?, ?, ?)";
-
+  "INSERT INTO reservations (id, seatingid, eventid, email, fullname, pin) VALUES ?";
 const reservations = [
   [1, 3, 4, "x", "x", 1],
   [2, 6, 4, "x", "x", 1],
@@ -142,113 +165,52 @@ const reservations = [
   [10, 16, 5, "x", "x", 1],
 ];
 
-db.query(createSeatingsTable, (err, res) => {
-  if (err) {
-    console.log(err);
-  }
-});
-
-function initTables() {
-  try {
-    db.query("SELECT COUNT(*) AS count FROM seatings", (err, res) => {
-      if (res[0].count === 0) {
-        db.query(insertSeatingsNames, [seatings], function (err, result) {
-          if (err) throw err;
-        });
-      }
-    });
-    db.query("SELECT COUNT(*) AS count FROM events", (err, res) => {
-      if (res[0].count === 0) {
-        db.query(insertEvents, [events], function (err, result) {
-          if (err) throw err;
-        });
-      }
-    });
-    db.query("SELECT COUNT(*) AS count FROM reservations", (err, res) => {
-      if (res[0].count === 0) {
-        db.query(insertReservations, [reservations], function (err, result) {
-          if (err) throw err;
-        });
-      }
-    });
-  } catch (err) {
-    console.log(err);
-  }
-}
+const initTables = () => {
+  db.query("SELECT COUNT(*) AS count FROM seatings", (err, res) => {
+    if (res[0].count === 0) {
+      db.query(insertSeatingsNames, [seatings], (err) => {
+        if (err) throw err;
+      });
+    }
+  });
+  db.query("SELECT COUNT(*) AS count FROM events", (err, res) => {
+    if (res[0].count === 0) {
+      db.query(insertEvents, [events], (err) => {
+        if (err) throw err;
+      });
+    }
+  });
+  db.query("SELECT COUNT(*) AS count FROM reservations", (err, res) => {
+    if (res[0].count === 0) {
+      db.query(insertReservations, [reservations], (err) => {
+        if (err) throw err;
+      });
+    }
+  });
+};
 
 initTables();
 
-const createEventsTable = `CREATE TABLE IF NOT EXISTS events(
-    eventid INT PRIMARY KEY AUTO_INCREMENT NOT NULL,
-    eventname VARCHAR(255) NOT NULL,
-    date VARCHAR(10) NOT NULL,
-    artists LONGTEXT NOT NULL
-  )`;
-
-db.query(createEventsTable, (err, res) => {
-  if (err) {
-    console.log(err);
-  }
-});
-
-const createReservationsTable = `CREATE TABLE IF NOT EXISTS reservations(
-    id INT PRIMARY KEY AUTO_INCREMENT NOT NULL,
-    seatingid INT NOT NULL,
-    eventid INT NOT NULL,
-    email VARCHAR(255) NOT NULL,
-    fullname VARCHAR(255) NOT NULL,
-    pin VARCHAR(4) NOT NULL,
-    FOREIGN KEY (seatingid) REFERENCES seatings(seatingid),
-    FOREIGN KEY (eventid) REFERENCES events(eventid)
-  )`;
-
-db.query(createReservationsTable, (err, res) => {
-  if (err) {
-    console.log(err);
-  }
-});
 app.get("/reservations/:eventid", (req, res) => {
   const eventId = req.params.eventid;
-  const query = `SELECT
-      r.id AS reservationId,
-      r.email,
-      r.fullname,
-      r.pin,
-      s.seatingname,
-      e.eventname,
-      e.date,
-      e.artists
-    FROM
-      reservations r
-    JOIN
-      events e ON r.eventid = e.eventid
-    JOIN
-      seatings s ON r.seatingid = s.seatingid
-    WHERE
-      e.eventid = ?
-   `;
-
+  const query = `SELECT r.id, r.email, r.fullname, r.pin, s.seatingname, e.eventname, e.date, e.artists 
+                 FROM reservations r 
+                 JOIN events e ON r.eventid = e.eventid 
+                 JOIN seatings s ON r.seatingid = s.seatingid 
+                 WHERE e.eventid = ?`;
   db.execute(query, [eventId], (err, results) => {
-    if (err) {
-      return res.status(500).json({
-        error: err,
-      });
-    }
+    if (err) return res.status(500).json({ error: err });
     return res.json(results);
   });
 });
 
 app.get("/events", (req, res) => {
-  const query = "SELECT * FROM events";
-
-  db.query(query, (err, results) => {
-    if (err) {
-      console.log(err);
-    }
+  db.query("SELECT * FROM events", (err, results) => {
+    if (err) console.log(err);
     return res.json(results);
   });
 });
 
 app.listen(3000, () => {
-  console.log("listng");
+  console.log("Server listening on port 3000");
 });
