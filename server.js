@@ -1,10 +1,23 @@
 require("dotenv").config();
+const nodemailer = require("nodemailer");
 const express = require("express");
 const mysql = require("mysql2");
 const cors = require("cors");
-
+const sendMail = require("./email");
 const app = express();
 app.use(cors());
+
+app.use(express.json());
+app.use(express.urlencoded({ extended: true }));
+
+const transporter = nodemailer.createTransport({
+  host: "smtp.xxx.com",
+  port: 587,
+  secure: false,
+  auth: {
+    user: "xxx@xxx.com",
+  },
+});
 
 const db = mysql.createPool({
   connectionLimit: 10,
@@ -193,12 +206,23 @@ initTables();
 
 app.get("/reservations/:eventid", (req, res) => {
   const eventId = req.params.eventid;
-  const query = `SELECT r.id, r.email, r.fullname, r.pin, s.seatingname, e.eventname, e.date, e.artists 
+  const query = `SELECT r.id, r.email, r.fullname, r.pin, s.seatingname, s.seatingid, e.eventid, e.eventname, e.date, e.artists 
                  FROM reservations r 
                  JOIN events e ON r.eventid = e.eventid 
                  JOIN seatings s ON r.seatingid = s.seatingid 
                  WHERE e.eventid = ?`;
   db.execute(query, [eventId], (err, results) => {
+    if (err) return res.status(500).json({ error: err });
+    return res.json(results);
+  });
+});
+
+app.get("/reservations", (req, res) => {
+  const query = `SELECT r.id, r.email, r.fullname, r.pin, s.seatingname, s.seatingid, e.eventid, e.eventname, e.date, e.artists 
+                 FROM reservations r 
+                 JOIN events e ON r.eventid = e.eventid 
+                 JOIN seatings s ON r.seatingid = s.seatingid `;
+  db.execute(query, (err, results) => {
     if (err) return res.status(500).json({ error: err });
     return res.json(results);
   });
@@ -210,6 +234,146 @@ app.get("/events", (req, res) => {
     return res.json(results);
   });
 });
+
+app.post("/create-reservation", async (req, res) => {
+  console.log("backend reservation modal click", req.body);
+  const reservation = req.body;
+
+  const seatingId = await getSeatingId(reservation.seatingname);
+  const eventId = await getEventId(reservation.title);
+  console.log(seatingId);
+  console.log(eventId);
+
+  db.query(
+    insertCreateReservation,
+    [seatingId, eventId, reservation.pin],
+    (error, res) => {
+      console.log(res);
+    }
+  );
+});
+
+app.patch("/update-reservation", async (req, res) => {
+  console.log(req.body);
+  const reservation = req.body;
+  const seatingId = await getSeatingId(reservation.seatingname);
+  const eventId = await getEventId(reservation.title);
+  console.log(seatingId, eventId);
+
+  const reservationId = await getReservationId(seatingId, eventId);
+  console.log("reservationId", reservationId);
+
+  db.query("UPDATE reservations SET email = ?, fullname = ? WHERE id = ?", [
+    reservation.email,
+    reservation.fullname,
+    reservationId,
+  ]);
+});
+
+app.delete("/delete-event", async (req, res) => {
+  console.log(req.body);
+  const { eventId } = req.body;
+
+  if (!eventId) {
+    return res.status(400).json({ error: "eventId is required" });
+  }
+
+  db.query("DELETE FROM events WHERE eventid = ?", [eventId], (err, result) => {
+    if (err) {
+      console.error("Database error:", err);
+      return res.status(500).json({ error: "Database error" });
+    }
+
+    if (result.affectedRows === 0) {
+      return res.status(404).json({ error: "Event not found" });
+    }
+
+    res.json({ success: true, message: "Event deleted successfully" });
+  });
+});
+
+app.post("/add-event", async (req, res) => {
+  const { title, date, artists } = req.body;
+
+  db.query(insertNewEvent, [title, date, artists], (error, response) => {
+    if (error) {
+      return res
+        .status(500)
+        .json({ msg: "Błąd serwera", error: error.message });
+    }
+    return res
+      .status(201)
+      .set("X-Test-Header", "Sukces")
+      .json({ msg: "Dodano event", eventId: response });
+  });
+});
+
+app.get("/send-mail", async (req, res) => {
+  // wysylanie maila tu
+  sendEmail("vimec94438@isorax.com");
+});
+
+const insertCreateReservation =
+  "INSERT INTO reservations (seatingid, eventid, pin) VALUES (?, ?, ?)";
+const insertNewEvent =
+  "INSERT INTO events (eventname, date, artists) VALUES (?, ?, ?)";
+
+function getSeatingId(seatingname) {
+  return new Promise((resolve, reject) => {
+    const selectIdsSql = `SELECT seatingid FROM seatings WHERE seatingname = ?`;
+    db.query(selectIdsSql, [seatingname], (err, res) => {
+      if (err) return reject(err);
+      resolve(res[0]?.seatingid); // Pobiera pierwszy seatingid, jeśli istnieje
+    });
+  });
+}
+function getEventId(eventTitle) {
+  return new Promise((resolve, reject) => {
+    const selectIdsSql = `SELECT eventid FROM events WHERE eventname = ?`;
+    db.query(selectIdsSql, [eventTitle], (err, res) => {
+      if (err) return reject(err);
+      resolve(res[0]?.eventid); // Pobiera pierwszy seatingid, jeśli istnieje
+    });
+  });
+}
+function getReservationId(seatingid, eventid) {
+  return new Promise((resolve, reject) => {
+    const selectIdsSql = `SELECT id FROM reservations WHERE eventid = ? and seatingid = ?`;
+    db.query(selectIdsSql, [eventid, seatingid], (err, res) => {
+      if (err) return reject(err);
+      resolve(res[0]?.id); // Pobiera pierwszy seatingid, jeśli istnieje
+    });
+  });
+}
+
+async function sendEmail(
+  email,
+  eventname,
+  eventdate,
+  seatingname,
+  fullname,
+  pin
+) {
+  const mailOptions = {
+    from: '"TECHNO CLUB PROJECT" <xxx>',
+    to: `${email}`,
+    subject: "Techno Club Project",
+    text: "Here is a pin for Your reservation",
+    html: `<h2>HELLO!</h2>\n
+    <h3>You created reservation for <u>${eventname}<u> event at <u>${eventdate}<u> on <u>${seatingname}<u> seating.</h3>\n
+    <h3>Use code below to confirm Your reservation:</h3>\n
+    <div class="email-pin"><h1>${pin}</h1></div>
+    <h3>Reservation in the name of: <u>${fullname}<u></h3>`,
+    attachments: [{}],
+  };
+
+  try {
+    const info = await transporter.sendMail(mailOptions);
+    console.log("Email sent successfully:", info.response);
+  } catch (error) {
+    console.error("Error sending email:", error);
+  }
+}
 
 app.listen(3000, () => {
   console.log("Server listening on port 3000");
