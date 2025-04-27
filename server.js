@@ -3,19 +3,19 @@ const nodemailer = require("nodemailer");
 const express = require("express");
 const mysql = require("mysql2");
 const cors = require("cors");
-const sendMail = require("./email");
 const app = express();
+const cron = require("node-cron");
+
 app.use(cors());
 
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
 const transporter = nodemailer.createTransport({
-  host: "smtp.xxx.com",
-  port: 587,
-  secure: false,
+  service: process.env.EMAIL_SERVICE,
   auth: {
-    user: "xxx@xxx.com",
+    user: process.env.EMAIL,
+    pass: process.env.EMAIL_PASS,
   },
 });
 
@@ -32,8 +32,7 @@ db.getConnection((err, connection) => {
   console.log("Connected to database!");
   connection.release();
 });
-
-const createTables = () => {
+const createTables = async () => {
   const createSeatingsTable = `CREATE TABLE IF NOT EXISTS seatings(
     seatingid INT PRIMARY KEY AUTO_INCREMENT NOT NULL,
     seatingname VARCHAR(45) NOT NULL
@@ -57,15 +56,20 @@ const createTables = () => {
     FOREIGN KEY (eventid) REFERENCES events(eventid)
   )`;
 
-  db.query(createSeatingsTable, (err) => {
-    if (err) console.log(err);
-  });
-  db.query(createEventsTable, (err) => {
-    if (err) console.log(err);
-  });
-  db.query(createReservationsTable, (err) => {
-    if (err) console.log(err);
-  });
+  const queryPromise = (sql) => {
+    return new Promise((resolve, reject) => {
+      db.query(sql, (err, res) => {
+        if (err) return reject(err);
+        resolve(res);
+      });
+    });
+  };
+
+  return Promise.all([
+    queryPromise(createSeatingsTable),
+    queryPromise(createEventsTable),
+    queryPromise(createReservationsTable),
+  ]).then(() => true);
 };
 
 createTables();
@@ -178,28 +182,48 @@ const reservations = [
   [10, 16, 5, "x", "x", 1],
 ];
 
-const initTables = () => {
-  db.query("SELECT COUNT(*) AS count FROM seatings", (err, res) => {
-    if (res[0].count === 0) {
-      db.query(insertSeatingsNames, [seatings], (err) => {
-        if (err) throw err;
+const initTables = async () => {
+  const checkAndInsert = (table, countSql, insertSql, data) => {
+    return new Promise((resolve, reject) => {
+      db.query(countSql, (err, res) => {
+        if (err) return reject(err);
+        if (res[0].count === 0) {
+          db.query(insertSql, [data], (err2) => {
+            if (err2) return reject(err2);
+            console.log(`Dane dodane do tabeli ${table}`);
+            resolve();
+          });
+        } else {
+          console.log(`Tabela ${table} już zawiera dane`);
+          resolve();
+        }
       });
-    }
-  });
-  db.query("SELECT COUNT(*) AS count FROM events", (err, res) => {
-    if (res[0].count === 0) {
-      db.query(insertEvents, [events], (err) => {
-        if (err) throw err;
-      });
-    }
-  });
-  db.query("SELECT COUNT(*) AS count FROM reservations", (err, res) => {
-    if (res[0].count === 0) {
-      db.query(insertReservations, [reservations], (err) => {
-        if (err) throw err;
-      });
-    }
-  });
+    });
+  };
+
+  try {
+    await checkAndInsert(
+      "seatings",
+      "SELECT COUNT(*) AS count FROM seatings",
+      insertSeatingsNames,
+      seatings
+    );
+    await checkAndInsert(
+      "events",
+      "SELECT COUNT(*) AS count FROM events",
+      insertEvents,
+      events
+    );
+    await checkAndInsert(
+      "reservations",
+      "SELECT COUNT(*) AS count FROM reservations",
+      insertReservations,
+      reservations
+    );
+  } catch (err) {
+    console.error("Błąd podczas inicjalizacji tabel:", err);
+    throw err;
+  }
 };
 
 initTables();
@@ -246,9 +270,9 @@ app.post("/create-reservation", async (req, res) => {
 
   db.query(
     insertCreateReservation,
-    [seatingId, eventId, reservation.pin],
+    [seatingId, eventId, reservation.pin, "email", "fullname"],
     (error, res) => {
-      console.log(res);
+      console.log(error);
     }
   );
 });
@@ -263,11 +287,15 @@ app.patch("/update-reservation", async (req, res) => {
   const reservationId = await getReservationId(seatingId, eventId);
   console.log("reservationId", reservationId);
 
-  db.query("UPDATE reservations SET email = ?, fullname = ? WHERE id = ?", [
-    reservation.email,
-    reservation.fullname,
-    reservationId,
-  ]);
+  db.query(
+    "UPDATE reservations SET email = ?, fullname = ? WHERE id = ?",
+    [reservation.email, reservation.fullname, reservationId],
+    (err, result) => {
+      if (err) {
+      }
+      res.json({ success: true, message: "reservation deleted successfully" });
+    }
+  );
 });
 
 app.delete("/delete-event", async (req, res) => {
@@ -292,6 +320,32 @@ app.delete("/delete-event", async (req, res) => {
   });
 });
 
+app.delete("/delete-reservation", async (req, res) => {
+  console.log(req.body);
+  const { reservationId } = req.body;
+
+  if (!reservationId) {
+    return res.status(400).json({ error: "reservationId is required" });
+  }
+
+  db.query(
+    "DELETE FROM reservations WHERE id = ?",
+    [reservationId],
+    (err, result) => {
+      if (err) {
+        console.error("Database error:", err);
+        return res.status(500).json({ error: "Database error" });
+      }
+
+      if (result.affectedRows === 0) {
+        return res.status(404).json({ error: "reservation not found" });
+      }
+
+      res.json({ success: true, message: "reservation deleted successfully" });
+    }
+  );
+});
+
 app.post("/add-event", async (req, res) => {
   const { title, date, artists } = req.body;
 
@@ -308,13 +362,13 @@ app.post("/add-event", async (req, res) => {
   });
 });
 
-app.get("/send-mail", async (req, res) => {
-  // wysylanie maila tu
-  sendEmail("vimec94438@isorax.com");
+app.post("/send-mail", async (req, res) => {
+  console.log(req.body);
+  sendEmail(req.body);
 });
 
 const insertCreateReservation =
-  "INSERT INTO reservations (seatingid, eventid, pin) VALUES (?, ?, ?)";
+  "INSERT INTO reservations (seatingid, eventid, pin, email, fullname) VALUES (?, ?, ?, ?, ?)";
 const insertNewEvent =
   "INSERT INTO events (eventname, date, artists) VALUES (?, ?, ?)";
 
@@ -346,25 +400,17 @@ function getReservationId(seatingid, eventid) {
   });
 }
 
-async function sendEmail(
-  email,
-  eventname,
-  eventdate,
-  seatingname,
-  fullname,
-  pin
-) {
+async function sendEmail({ email, title, date, seatingname, fullname, pin }) {
   const mailOptions = {
-    from: '"TECHNO CLUB PROJECT" <xxx>',
+    from: "13.apps.dev@gmail.com",
     to: `${email}`,
     subject: "Techno Club Project",
     text: "Here is a pin for Your reservation",
     html: `<h2>HELLO!</h2>\n
-    <h3>You created reservation for <u>${eventname}<u> event at <u>${eventdate}<u> on <u>${seatingname}<u> seating.</h3>\n
+    <h3>You created reservation for <u>${title}<u> event at <u>${date}<u> on <u>${seatingname}<u> seating.</h3>\n
     <h3>Use code below to confirm Your reservation:</h3>\n
     <div class="email-pin"><h1>${pin}</h1></div>
     <h3>Reservation in the name of: <u>${fullname}<u></h3>`,
-    attachments: [{}],
   };
 
   try {
@@ -375,6 +421,28 @@ async function sendEmail(
   }
 }
 
+function dropTable(tableName) {
+  return new Promise((resolve, reject) => {
+    const sql = `DROP TABLE IF EXISTS ??`;
+    db.query(sql, [tableName], (err, res) => {
+      if (err) return reject(err);
+      console.log(`Usunięto tabelę: ${tableName}`);
+      resolve(res);
+    });
+  });
+}
+
+cron.schedule("0 0 * * *", async () => {
+  try {
+    await dropTable("reservations");
+    await dropTable("seatings");
+    await dropTable("events");
+    await createTables();
+    initTables();
+  } catch (err) {
+    console.error("Błąd w zadaniu CRON:", err);
+  }
+});
 app.listen(3000, () => {
   console.log("Server listening on port 3000");
 });
